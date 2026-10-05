@@ -328,15 +328,17 @@ textarea {
   height: 100%;
 }
 
-/* ---------- Reveal on scroll ---------- */
-.reveal {
+/* ---------- Reveal on scroll ----------
+   Hidden state is gated behind .js-motion, which useRevealObserver adds at
+   runtime. If that effect never runs, content stays visible by default. */
+.js-motion .reveal {
   opacity: 0;
   transform: translateY(28px);
   transition: opacity 0.9s var(--ease-out), transform 0.9s var(--ease-out);
   will-change: opacity, transform;
 }
 
-.reveal.is-in {
+.js-motion .reveal.is-in {
   opacity: 1;
   transform: none;
 }
@@ -350,7 +352,8 @@ textarea {
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
   }
-  .reveal {
+  .reveal,
+  .js-motion .reveal {
     opacity: 1;
     transform: none;
   }

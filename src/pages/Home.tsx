@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom'
 import { CATEGORIES, products } from '../data/products'
 import { ProductCard } from '../components/ProductCard'
 import { UnitArt } from '../components/UnitArt'
-import { useReveal } from '../hooks/useReveal'
 
 const HERO = products.find((p) => p.slug === 'borealis-glacier')!
 
@@ -96,7 +95,6 @@ function BtuFinder() {
 
 export function Home() {
   const featured = products.filter((p) => ['ba-02', 'ba-01', 'ba-04', 'ba-07'].includes(p.id))
-  const heroRef = useReveal<HTMLDivElement>({ threshold: 0.05 })
 
   return (
     <>
@@ -138,7 +136,7 @@ export function Home() {
             </dl>
           </div>
 
-          <div className="hero__art" ref={heroRef}>
+          <div className="hero__art">
             <div className="hero__art-frame reveal">
               <UnitArt product={HERO} className="hero__unit" />
             </div>

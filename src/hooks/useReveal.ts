@@ -1,36 +1,53 @@
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 
 /**
- * Adds the `is-in` class once an element scrolls into view.
- * Pair with the `.reveal` class for the staggered entrance.
+ * Reveals every `.reveal` element as it scrolls into view.
+ *
+ * Two deliberate safety choices:
+ *  - The hidden state is gated behind a `js-motion` class added here, so if
+ *    this effect never runs the content stays fully visible instead of
+ *    disappearing.
+ *  - Positions are measured with getBoundingClientRect on the main thread.
+ *    IntersectionObserver and requestAnimationFrame callbacks do not fire in
+ *    headless renderers or some webviews, which would otherwise leave the
+ *    page stuck at opacity 0.
+ *
+ * Runs globally from the app shell, so components only need the CSS class.
+ * A MutationObserver re-checks after DOM changes, covering filtered grids
+ * and route transitions.
  */
-export function useReveal<T extends HTMLElement = HTMLDivElement>(options?: {
-  threshold?: number
-  once?: boolean
-}) {
-  const ref = useRef<T | null>(null)
-
+export function useRevealObserver() {
   useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    if (typeof IntersectionObserver === 'undefined') {
-      el.classList.add('is-in')
-      return
-    }
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            entry.target.classList.add('is-in')
-            if (options?.once !== false) observer.unobserve(entry.target)
-          }
-        }
-      },
-      { threshold: options?.threshold ?? 0.15, rootMargin: '0px 0px -8% 0px' },
-    )
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [options?.threshold, options?.once])
+    const root = document.documentElement
+    root.classList.add('js-motion')
 
-  return ref
+    let last = 0
+    const check = () => {
+      last = Date.now()
+      const viewport = window.innerHeight || root.clientHeight
+      document.querySelectorAll('.reveal:not(.is-in)').forEach((el) => {
+        const rect = el.getBoundingClientRect()
+        if (rect.top < viewport * 0.94 && rect.bottom > 0) el.classList.add('is-in')
+      })
+    }
+
+    check()
+
+    const onScroll = () => {
+      if (Date.now() - last > 80) check()
+    }
+
+    window.addEventListener('scroll', onScroll, { passive: true })
+    window.addEventListener('resize', onScroll)
+
+    const mutations = new MutationObserver(check)
+    mutations.observe(document.body, { childList: true, subtree: true })
+
+    return () => {
+      window.removeEventListener('scroll', onScroll)
+      window.removeEventListener('resize', onScroll)
+      mutations.disconnect()
+      root.classList.remove('js-motion')
+    }
+  }, [])
 }

@@ -26,5 +26,12 @@ Storefront for portable air conditioners. Vite + React 18 + TypeScript, React Ro
 - Cart state: `src/hooks/useCart.tsx`, persisted to `localStorage` under `borealis.cart.v1`.
 - Orders are simulated and stored locally (`src/lib/orders.ts`, `borealis.orders.v1`).
   Checkout never transmits card data.
-- Scroll reveals use `useReveal` + the `.reveal`/`.is-in` classes.
+- Scroll reveals use `useRevealObserver()` (mounted once in `App.tsx`) plus the
+  `.reveal` / `.is-in` classes. Two constraints to keep in mind:
+  - The hidden state lives under `.js-motion .reveal` in global.css. That class is
+    added at runtime, so if the effect ever fails the content stays visible rather
+    than disappearing. Do not move `opacity: 0` back onto bare `.reveal`.
+  - Reveal positions are measured with `getBoundingClientRect`, not
+    IntersectionObserver — IO and `requestAnimationFrame` callbacks do not fire in
+    headless renderers or some webviews, which leaves the page stuck invisible.
 - Respect `prefers-reduced-motion` — global.css already disables animation for it.
