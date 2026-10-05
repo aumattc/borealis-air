@@ -8,3 +8,7 @@ dist-ssr
 .vite
 npm-debug.log*
 *.tsbuildinfo
+
+# Backend local database
+server/data/*.db
+server/data/*.db-*

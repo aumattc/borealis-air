@@ -2,7 +2,7 @@ import { useState, type ChangeEvent, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { formatPrice } from '../data/products'
 import { useCart } from '../hooks/useCart'
-import { saveOrder, type Order } from '../lib/orders'
+import { ApiError, createCheckout, syncCart } from '../lib/api'
 
 interface Fields {
   email: string
@@ -37,6 +37,7 @@ export function Checkout() {
   const navigate = useNavigate()
   const [f, setF] = useState<Fields>(EMPTY)
   const [errors, setErrors] = useState<Partial<Record<keyof Fields, string>>>({})
+  const [formError, setFormError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   if (items.length === 0) {
@@ -85,30 +86,43 @@ export function Checkout() {
       return
     }
     setBusy(true)
-    const ref = `BA-${Date.now().toString(36).toUpperCase().slice(-6)}`
-    const order: Order = {
-      ref,
-      placedAt: new Date().toISOString(),
-      email: f.email,
-      name: `${f.firstName} ${f.lastName}`,
-      address: `${f.address}, ${f.city} ${f.postcode}, ${f.country}`,
-      lines: items.map((i) => ({
-        name: i.product.name,
-        qty: i.qty,
-        price: i.product.price,
-        slug: i.product.slug,
-      })),
-      subtotal,
-      shipping,
-      tax,
-      total,
-    }
-    // Simulated payment authorisation — no network call, no card data stored.
-    window.setTimeout(() => {
-      saveOrder(order)
+    setFormError(null)
+    void submit()
+  }
+
+  const submit = async () => {
+    try {
+      // The server prices and reserves stock; the local cart only tells it what
+      // was chosen.
+      await syncCart(items.map((i) => ({ productId: i.productId, qty: i.qty })))
+
+      const { order, payment } = await createCheckout({
+        email: f.email,
+        firstName: f.firstName,
+        lastName: f.lastName,
+        addressLine1: f.address,
+        city: f.city,
+        postcode: f.postcode,
+        country: f.country,
+      })
+
+      // Card details are never sent anywhere; this demo only carries the shopper
+      // to the confirmation page for the order the server created.
       clear()
-      navigate(`/order/${ref}`, { replace: true })
-    }, 1100)
+      navigate(`/order/${order.ref}`, { replace: true, state: { intentId: payment.intentId } })
+    } catch (err) {
+      if (err instanceof ApiError) {
+        const fields = err.fieldErrors
+        if (Object.keys(fields).length > 0) {
+          setErrors(fields as Partial<Record<keyof Fields, string>>)
+        } else {
+          setFormError(err.message)
+        }
+      } else {
+        setFormError('Something went wrong. Please try again.')
+      }
+      setBusy(false)
+    }
   }
 
   const field = (
@@ -215,6 +229,11 @@ export function Checkout() {
           <button className="btn btn--ember btn--block" type="submit" disabled={busy}>
             {busy ? 'Authorising…' : `Pay ${formatPrice(total)}`}
           </button>
+          {formError && (
+            <p className="field__err" role="alert" style={{ marginTop: '0.75rem' }}>
+              {formError}
+            </p>
+          )}
           <p className="summary__note dim">Encrypted end to end · 30-day returns</p>
         </aside>
       </form>

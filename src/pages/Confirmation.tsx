@@ -1,15 +1,61 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useLocation, useParams } from 'react-router-dom'
 import { formatPrice } from '../data/products'
-import { getOrder, type Order } from '../lib/orders'
+import type { Order } from '../lib/orders'
+import { confirmMockPayment, fetchOrder, toFrontendOrder, type ApiOrder } from '../lib/api'
 
 export function Confirmation() {
   const { ref } = useParams()
+  const location = useLocation()
+  const intentId = (location.state as { intentId?: string } | null)?.intentId
   const [order, setOrder] = useState<Order | null | undefined>(undefined)
+  const [pending, setPending] = useState(false)
 
   useEffect(() => {
-    setOrder(ref ? getOrder(ref) : null)
-  }, [ref])
+    let cancelled = false
+
+    async function load() {
+      if (!ref) {
+        setOrder(null)
+        return
+      }
+
+      try {
+        // When the mock provider is in use, settle the intent the way the
+        // provider's webhook would, so the order reflects the payment.
+        if (intentId) {
+          try {
+            await confirmMockPayment(intentId, 'succeed')
+          } catch {
+            /* already settled or provider manages payment elsewhere */
+          }
+        }
+
+        let apiOrder: ApiOrder = await fetchOrder(ref)
+        if (cancelled) return
+
+        // Give a webhook a moment to land if the order is still settling.
+        if (apiOrder.paymentStatus === 'requires_payment') {
+          setPending(true)
+          for (let attempt = 0; attempt < 5 && apiOrder.paymentStatus === 'requires_payment'; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 800))
+            apiOrder = await fetchOrder(ref)
+            if (cancelled) return
+          }
+          setPending(false)
+        }
+
+        setOrder(toFrontendOrder(apiOrder))
+      } catch {
+        if (!cancelled) setOrder(null)
+      }
+    }
+
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [ref, intentId])
 
   if (order === undefined) return null
 
@@ -22,8 +68,8 @@ export function Confirmation() {
             We cannot find <em>that order.</em>
           </h1>
           <p className="lede">
-            The reference <span className="mono">{ref}</span> is not on this device. Orders are
-            stored locally in this demo.
+            The reference <span className="mono">{ref}</span> is not one we recognise. Check the
+            link in your confirmation email and try again.
           </p>
           <Link to="/shop" className="btn btn--ember">
             Back to the range
@@ -54,7 +100,7 @@ export function Confirmation() {
             />
           </svg>
         </div>
-        <p className="eyebrow">Order confirmed</p>
+        <p className="eyebrow">{pending ? 'Confirming payment…' : 'Order confirmed'}</p>
         <h1 className="display confirm__title">
           The cold front is <em>on its way.</em>
         </h1>
