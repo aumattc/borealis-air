@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
-import { Link, useLocation, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { formatPrice } from '../data/products'
 import type { Order } from '../lib/orders'
-import { confirmMockPayment, fetchOrder, toFrontendOrder, type ApiOrder } from '../lib/api'
+import { fetchOrder, toFrontendOrder, type ApiOrder } from '../lib/api'
 
 export function Confirmation() {
   const { ref } = useParams()
-  const location = useLocation()
-  const intentId = (location.state as { intentId?: string } | null)?.intentId
+  const [searchParams] = useSearchParams()
+  const returnedFromCheckout = searchParams.get('checkout') === 'success'
   const [order, setOrder] = useState<Order | null | undefined>(undefined)
   const [pending, setPending] = useState(false)
 
@@ -21,26 +21,19 @@ export function Confirmation() {
       }
 
       try {
-        // When the mock provider is in use, settle the intent the way the
-        // provider's webhook would, so the order reflects the payment.
-        if (intentId) {
-          try {
-            await confirmMockPayment(intentId, 'succeed')
-          } catch {
-            /* already settled or provider manages payment elsewhere */
-          }
-        }
-
         let apiOrder: ApiOrder = await fetchOrder(ref)
         if (cancelled) return
 
-        // Give a webhook a moment to land if the order is still settling.
-        if (apiOrder.paymentStatus === 'requires_payment') {
+        // Returning from a hosted checkout, the webhook may not have landed
+        // yet — give it a moment and poll rather than showing a stale status.
+        const unsettled = apiOrder.paymentStatus === 'requires_payment' || apiOrder.paymentStatus === 'processing'
+        if (returnedFromCheckout && unsettled) {
           setPending(true)
-          for (let attempt = 0; attempt < 5 && apiOrder.paymentStatus === 'requires_payment'; attempt++) {
+          for (let attempt = 0; attempt < 8 && unsettled; attempt++) {
             await new Promise((resolve) => setTimeout(resolve, 800))
             apiOrder = await fetchOrder(ref)
             if (cancelled) return
+            if (apiOrder.paymentStatus !== 'requires_payment' && apiOrder.paymentStatus !== 'processing') break
           }
           setPending(false)
         }
@@ -55,7 +48,7 @@ export function Confirmation() {
     return () => {
       cancelled = true
     }
-  }, [ref, intentId])
+  }, [ref, returnedFromCheckout])
 
   if (order === undefined) return null
 

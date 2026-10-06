@@ -41,11 +41,28 @@ export const config = {
   corsOrigins: list(process.env.CORS_ORIGINS),
   /** Public origin of the API itself, used for absolute links. */
   appUrl: process.env.APP_URL ?? `http://localhost:${port}`,
+  /**
+   * Public origin of the storefront. Checkout redirects here after the shopper
+   * pays or cancels, so it must be reachable by the browser. Defaults to the
+   * Vite dev port, which is separate from the API port.
+   */
+  storefrontUrl: (
+    process.env.STOREFRONT_URL ??
+    process.env.APP_URL ??
+    `http://localhost:${isProd ? port : int(process.env.STOREFRONT_PORT, 12000)}`
+  ).replace(/\/$/, ''),
 
   sessionSecret: process.env.SESSION_SECRET ?? generatedSecret,
+  /**
+   * Key material for encrypting stored provider credentials. A stable value is
+   * required in production: rotating it makes existing ciphertext unreadable.
+   */
+  settingsEncryptionKey: process.env.SETTINGS_ENCRYPTION_KEY ?? process.env.SESSION_SECRET ?? generatedSecret,
   sessionTtlDays: int(process.env.SESSION_TTL_DAYS, 30),
   /** Held stock is released if payment has not settled within this window. */
   reservationTtlMinutes: int(process.env.RESERVATION_TTL_MINUTES, 30),
+  /** Storefront currency for new orders. */
+  currency: (process.env.CURRENCY ?? 'usd').toLowerCase(),
 
   /** Free shipping threshold and flat rate, in cents. Mirrors the storefront. */
   freeShippingThresholdCents: int(process.env.FREE_SHIPPING_THRESHOLD_CENTS, 30000),
@@ -79,6 +96,11 @@ export function validateConfig(): string[] {
 
   if (config.isProd && !process.env.SESSION_SECRET) {
     problems.push('SESSION_SECRET must be set in production (otherwise sessions reset on every restart).')
+  }
+  if (config.isProd && !process.env.SETTINGS_ENCRYPTION_KEY && !process.env.SESSION_SECRET) {
+    problems.push(
+      'SETTINGS_ENCRYPTION_KEY (or SESSION_SECRET) must be set in production so stored payment credentials stay decryptable.',
+    )
   }
   if (config.isProd && config.corsOrigins.length === 0) {
     problems.push('CORS_ORIGINS must list the storefront origin(s) in production.')

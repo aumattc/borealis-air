@@ -23,7 +23,15 @@ interface CheckoutBody {
     taxCents: number
     lines: { productId: string; qty: number }[]
   }
-  payment: { provider: string; intentId: string; clientSecret: string | null; status: string }
+  payment: {
+    provider: string
+    intentId: string
+    clientSecret: string | null
+    status: string
+    checkoutUrl?: string
+    sessionId?: string
+    checkoutStyle: 'stripe' | 'mock'
+  }
 }
 
 describe('checkout and payment', () => {
@@ -42,7 +50,7 @@ describe('checkout and payment', () => {
     assert.equal(res.status, 400)
   })
 
-  it('creates a pending order, holds stock and returns a client secret', async () => {
+  it('creates a pending order, holds stock and returns a hosted checkout URL', async () => {
     const client = newClient(ctx)
     await client.post('/api/cart/items', { productId: 'ba-02', qty: 2 })
 
@@ -55,7 +63,9 @@ describe('checkout and payment', () => {
     assert.equal(res.body.order.paymentStatus, 'requires_payment')
     assert.equal(res.body.order.subtotalCents, 129800)
     assert.equal(res.body.payment.provider, 'mock')
-    assert.ok(res.body.payment.clientSecret, 'client secret should be returned')
+    assert.equal(res.body.payment.checkoutStyle, 'mock')
+    assert.ok(res.body.payment.checkoutUrl, 'a hosted checkout URL should be returned')
+    assert.ok(res.body.payment.sessionId, 'a checkout session id should be returned')
     assert.ok(res.body.order.ref.startsWith('BA-'))
 
     // Stock should now be held, not yet sold.

@@ -1,8 +1,8 @@
-import { useState, type ChangeEvent, type FormEvent } from 'react'
+import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { formatPrice } from '../data/products'
 import { useCart } from '../hooks/useCart'
-import { ApiError, createCheckout, syncCart } from '../lib/api'
+import { ApiError, createCheckout, fetchCheckoutConfig, syncCart, type CheckoutConfig } from '../lib/api'
 
 interface Fields {
   email: string
@@ -12,10 +12,6 @@ interface Fields {
   city: string
   postcode: string
   country: string
-  card: string
-  expiry: string
-  cvc: string
-  nameOnCard: string
 }
 
 const EMPTY: Fields = {
@@ -26,10 +22,6 @@ const EMPTY: Fields = {
   city: '',
   postcode: '',
   country: 'United States',
-  card: '',
-  expiry: '',
-  cvc: '',
-  nameOnCard: '',
 }
 
 export function Checkout() {
@@ -39,6 +31,13 @@ export function Checkout() {
   const [errors, setErrors] = useState<Partial<Record<keyof Fields, string>>>({})
   const [formError, setFormError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [config, setConfig] = useState<CheckoutConfig | null>(null)
+
+  useEffect(() => {
+    fetchCheckoutConfig()
+      .then(setConfig)
+      .catch(() => setConfig(null))
+  }, [])
 
   if (items.length === 0) {
     return (
@@ -70,11 +69,6 @@ export function Checkout() {
     if (!f.address.trim()) next.address = 'Required'
     if (!f.city.trim()) next.city = 'Required'
     if (!f.postcode.trim()) next.postcode = 'Required'
-    const digits = f.card.replace(/\s/g, '')
-    if (!/^\d{15,16}$/.test(digits)) next.card = 'Card number looks wrong'
-    if (!/^\d{2}\s?\/\s?\d{2}$/.test(f.expiry)) next.expiry = 'Use MM/YY'
-    if (!/^\d{3,4}$/.test(f.cvc)) next.cvc = '3 or 4 digits'
-    if (!f.nameOnCard.trim()) next.nameOnCard = 'Required'
     setErrors(next)
     return Object.keys(next).length === 0
   }
@@ -106,9 +100,16 @@ export function Checkout() {
         country: f.country,
       })
 
-      // Card details are never sent anywhere; this demo only carries the shopper
-      // to the confirmation page for the order the server created.
       clear()
+
+      if (payment.checkoutUrl) {
+        // Hosted checkout: the shopper pays on Stripe's page (or, in
+        // development, the in-app mock page) and comes back to the order.
+        window.location.assign(payment.checkoutUrl)
+        return
+      }
+
+      // Provider without a hosted page: fall back to the confirmation screen.
       navigate(`/order/${order.ref}`, { replace: true, state: { intentId: payment.intentId } })
     } catch (err) {
       if (err instanceof ApiError) {
@@ -144,6 +145,8 @@ export function Checkout() {
       {errors[k] && <span className="field__err">{errors[k]}</span>}
     </label>
   )
+
+  const usingStripe = config?.checkoutStyle === 'stripe'
 
   return (
     <div className="wrap checkout">
@@ -183,15 +186,15 @@ export function Checkout() {
             <h2 className="form-section__title">
               <span className="mono dim">03</span> Payment
             </h2>
-            <div className="fields">
-              {field('nameOnCard', 'Name on card', { span: true })}
-              {field('card', 'Card number', { placeholder: '4242 4242 4242 4242', span: true, inputMode: 'numeric' })}
-              {field('expiry', 'Expiry', { placeholder: 'MM/YY' })}
-              {field('cvc', 'CVC', { placeholder: '123', inputMode: 'numeric' })}
-            </div>
+            <p className="lede" style={{ marginTop: 0 }}>
+              {usingStripe
+                ? 'You will be taken to Stripe to enter your card securely. Card details are never entered on this site or stored by us.'
+                : 'You will be taken to a secure payment step to complete your order. Card details are never entered on this site or stored by us.'}
+            </p>
             <p className="form-section__note dim">
-              This is a demonstration storefront. No card is charged and no payment details are
-              stored or transmitted.
+              {usingStripe
+                ? `Payments are processed by Stripe${config?.stripeMode === 'sandbox' ? ' (test mode)' : ''}.`
+                : 'Demonstration mode: no card is charged and no payment details are stored or transmitted.'}
             </p>
           </section>
         </div>
@@ -227,7 +230,7 @@ export function Checkout() {
             <strong>{formatPrice(total)}</strong>
           </div>
           <button className="btn btn--ember btn--block" type="submit" disabled={busy}>
-            {busy ? 'Authorising…' : `Pay ${formatPrice(total)}`}
+            {busy ? 'Opening secure payment…' : `Continue to payment · ${formatPrice(total)}`}
           </button>
           {formError && (
             <p className="field__err" role="alert" style={{ marginTop: '0.75rem' }}>

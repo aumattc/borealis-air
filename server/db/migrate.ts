@@ -231,6 +231,25 @@ const migrations: Migration[] = [
       CREATE INDEX idx_stock_reservations_product ON stock_reservations(product_id);
     `,
   },
+  {
+    id: '004_settings_and_checkout_sessions',
+    sql: `
+      -- Key/value store for runtime configuration managed from the admin CMS.
+      -- Secret values are stored AES-256-GCM encrypted (see lib/secrets.ts);
+      -- nothing here is ever returned to the browser in plaintext.
+      CREATE TABLE settings (
+        key         TEXT PRIMARY KEY,
+        value       TEXT,
+        updated_at  TEXT NOT NULL,
+        updated_by  TEXT REFERENCES customers(id) ON DELETE SET NULL
+      );
+
+      -- Stripe Checkout Sessions are addressed by id in the webhook, so keep a
+      -- direct pointer alongside the payment intent for fast lookups.
+      ALTER TABLE orders ADD COLUMN checkout_session_id TEXT;
+      CREATE INDEX idx_orders_checkout_session ON orders(checkout_session_id);
+    `,
+  },
 ]
 
 export function migrate(): { applied: string[] } {

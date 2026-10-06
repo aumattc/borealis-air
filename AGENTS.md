@@ -47,8 +47,22 @@ TypeScript). No npm packages, no native builds. Details in `server/README.md`.
 - Cart state: `src/hooks/useCart.tsx`, persisted to `localStorage` under `borealis.cart.v1`.
 - Orders are now persisted by the backend and read back via `src/lib/api.ts`.
   `src/lib/orders.ts` (`borealis.orders.v1`) is kept only for its types and legacy
-  reads; it is no longer written on checkout. Card fields are still never
-  transmitted — the demo settles the payment server-side through the mock provider.
+  reads; it is no longer written on checkout.
+- **Payments use hosted checkout.** The storefront never collects card data.
+  `POST /api/checkout` creates an order, reserves stock, and returns a
+  `checkoutUrl`; the browser redirects there (Stripe Checkout in production, an
+  in-app mock page in development) and returns to `/order/:ref?checkout=success`.
+  The webhook settles the order. `src/pages/MockCheckout.tsx` is the dev-only
+  stand-in and is only reachable when the mock provider is active.
+- **Admin CMS lives at `/admin`** (`src/pages/admin/`), a separate surface with
+  its own chrome and auth gate (`useAdminAuth`). It manages products, inventory,
+  orders and Stripe credentials. Backend routes are under `/api/admin/*` and all
+  call `requireAdmin`. Product CRUD is in `server/services/products.ts`.
+- Stripe credentials are managed at runtime: `server/services/settings.ts` stores
+  them encrypted (AES-256-GCM, `server/lib/secrets.ts`) with separate sandbox and
+  production slots and an active-mode switch. Env vars remain the fallback.
+  `getProvider()` resolves credentials per request, so a mode change needs no
+  restart. The admin UI only ever sees a masked preview.
 - Scroll reveals use `useRevealObserver()` (mounted once in `App.tsx`) plus the
   `.reveal` / `.is-in` classes. Two constraints to keep in mind:
   - The hidden state lives under `.js-motion .reveal` in global.css. That class is

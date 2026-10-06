@@ -35,6 +35,8 @@ export interface WebhookEvent {
   id: string
   type: string
   intentId: string | null
+  /** Present on Checkout Session events, which carry the session id. */
+  sessionId?: string | null
   orderRef: string | null
   amountCents: number | null
   status: IntentStatus | null
@@ -50,6 +52,34 @@ export interface PaymentProvider {
    * signature is absent, malformed, stale, or does not match.
    */
   verifyWebhook(rawBody: string, signatureHeader: string | undefined): WebhookEvent
+  /**
+   * Creates a hosted checkout session and returns the URL to redirect to. The
+   * shopper enters card details on the provider's page, never ours.
+   */
+  createCheckoutSession?(input: CheckoutSessionInput): Promise<CheckoutSessionResult>
+  /** Reads a session back, e.g. to resolve its PaymentIntent on return. */
+  retrieveCheckoutSession?(id: string): Promise<{ paymentIntentId: string | null; status: string }>
+}
+
+export interface CheckoutSessionInput {
+  orderRef: string
+  orderId: string
+  amountCents: number
+  currency: string
+  email: string
+  successUrl: string
+  cancelUrl: string
+  productName: string
+  metadata: Record<string, string>
+  idempotencyKey: string
+}
+
+export interface CheckoutSessionResult {
+  id: string
+  url: string
+  paymentIntentId: string | null
+  expiresAt: number | null
+  publishableKey: string
 }
 
 export function mapStatus(raw: string | undefined | null): IntentStatus {

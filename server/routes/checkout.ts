@@ -10,6 +10,7 @@ import { getOrCreateCart, markCartConverted } from '../services/cart.ts'
 import {
   cancelOrder,
   createOrder,
+  findOrderRowByPayment,
   getOrderByRef,
   getOrderRowByIntent,
   markFailed,
@@ -17,11 +18,18 @@ import {
 } from '../services/orders.ts'
 import { recordWebhookEvent, wasWebhookHandled } from '../services/webhooks.ts'
 import { getProvider, providerName } from '../payments/index.ts'
+import { publicCheckoutConfig } from '../services/settings.ts'
 
 export function registerCheckoutRoutes(router: Router): void {
   /**
-   * Creates a pending order and returns the client secret needed to confirm
-   * payment. Totals are computed server-side from the catalog.
+   * Public checkout configuration: which checkout the storefront should run and
+   * the publishable key to hand to Stripe.js. No secret ever appears here.
+   */
+  router.get('/api/checkout/config', () => ({ body: publicCheckoutConfig() }))
+
+  /**
+   * Creates a pending order and returns the hosted checkout URL to send the
+   * shopper to. Totals are computed server-side from the catalog.
    */
   router.post('/api/checkout', async (ctx) => {
     rateLimit(`checkout:${ctx.ip}`, { windowMs: 60_000, max: config.rateLimits.checkoutPerMinute })
@@ -164,10 +172,12 @@ export async function applyWebhookPayload(rawBody: string, signature: string | u
     return
   }
 
-  const row = event.intentId ? getOrderRowByIntent(event.intentId) : undefined
+  const row = findOrderRowByPayment(event)
   const orderId = row ? String(row.id) : null
 
   switch (event.type) {
+    case 'checkout.session.completed':
+    case 'checkout.session.async_payment_succeeded':
     case 'payment_intent.succeeded':
     case 'payment_intent.amount_capturable_updated':
       if (orderId) {
@@ -178,10 +188,15 @@ export async function applyWebhookPayload(rawBody: string, signature: string | u
           eventId: event.id,
         })
       } else {
-        logger.warn('webhook for unknown payment intent', { intentId: event.intentId })
+        logger.warn('webhook for unknown payment', {
+          intentId: event.intentId,
+          sessionId: event.sessionId ?? null,
+        })
       }
       break
 
+    case 'checkout.session.expired':
+    case 'checkout.session.async_payment_failed':
     case 'payment_intent.payment_failed':
     case 'payment_intent.canceled':
       if (orderId) {

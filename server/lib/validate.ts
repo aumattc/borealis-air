@@ -120,6 +120,103 @@ export class Validator {
     return this
   }
 
+  number(field: string, opts: { min?: number; max?: number; required?: boolean } = {}): this {
+    const { min = 0, max = Number.MAX_SAFE_INTEGER, required = true } = opts
+    const value = this.raw(field)
+
+    if (value === undefined || value === null || value === '') {
+      if (required) this.errors[field] = 'This field is required.'
+      return this
+    }
+    const n = typeof value === 'number' ? value : Number(value)
+    if (!Number.isFinite(n)) this.errors[field] = 'Must be a number.'
+    else if (n < min) this.errors[field] = `Must be at least ${min}.`
+    else if (n > max) this.errors[field] = `Must be at most ${max}.`
+    else this.out[field] = n
+    return this
+  }
+
+  bool(field: string, opts: { required?: boolean } = {}): this {
+    const value = this.raw(field)
+    if (value === undefined || value === null || value === '') {
+      if (opts.required) this.errors[field] = 'This field is required.'
+      return this
+    }
+    if (typeof value !== 'boolean') {
+      this.errors[field] = 'Must be true or false.'
+      return this
+    }
+    this.out[field] = value
+    return this
+  }
+
+  /** An array of non-empty strings, e.g. features or cooling modes. */
+  stringArray(field: string, opts: { max?: number; itemMax?: number; required?: boolean } = {}): this {
+    const { max = 50, itemMax = 300, required = true } = opts
+    const value = this.raw(field)
+
+    if (value === undefined || value === null) {
+      if (required) this.errors[field] = 'This field is required.'
+      return this
+    }
+    if (!Array.isArray(value)) {
+      this.errors[field] = 'Must be a list.'
+      return this
+    }
+    if (value.length > max) {
+      this.errors[field] = `Must have at most ${max} entries.`
+      return this
+    }
+    const items: string[] = []
+    for (const entry of value) {
+      if (typeof entry !== 'string' || !entry.trim()) {
+        this.errors[field] = 'Every entry must be non-empty text.'
+        return this
+      }
+      if (entry.length > itemMax) {
+        this.errors[field] = `Entries must be at most ${itemMax} characters.`
+        return this
+      }
+      items.push(entry.trim())
+    }
+    this.out[field] = items
+    return this
+  }
+
+  /** `[{ label, value }]` used by the product spec table. */
+  specArray(field: string, opts: { max?: number; required?: boolean } = {}): this {
+    const { max = 50, required = true } = opts
+    const value = this.raw(field)
+
+    if (value === undefined || value === null) {
+      if (required) this.errors[field] = 'This field is required.'
+      return this
+    }
+    if (!Array.isArray(value)) {
+      this.errors[field] = 'Must be a list.'
+      return this
+    }
+    if (value.length > max) {
+      this.errors[field] = `Must have at most ${max} entries.`
+      return this
+    }
+    const specs: { label: string; value: string }[] = []
+    for (const entry of value) {
+      if (typeof entry !== 'object' || entry === null) {
+        this.errors[field] = 'Every spec needs a label and a value.'
+        return this
+      }
+      const { label, value: val } = entry as { label?: unknown; value?: unknown }
+      if (typeof label !== 'string' || !label.trim() || typeof val !== 'string' || !val.trim()) {
+        this.errors[field] = 'Every spec needs a non-empty label and value.'
+        return this
+      }
+      specs.push({ label: label.trim(), value: val.trim() })
+    }
+    this.out[field] = specs
+    return this
+  }
+
   /** Injects a value that was not read from the body (e.g. the session id). */
   set(field: string, value: unknown): this {
     this.out[field] = value
@@ -141,4 +238,8 @@ export function asString(v: unknown): string {
 
 export function asInt(v: unknown): number {
   return typeof v === 'number' ? v : Number.parseInt(String(v), 10)
+}
+
+export function asNumber(v: unknown): number {
+  return typeof v === 'number' ? v : Number(v)
 }

@@ -2,8 +2,10 @@ import { query, queryOne, run, transaction, type Row } from '../db/index.ts'
 import { badRequest, conflict, notFound } from '../lib/errors.ts'
 import { logger } from '../lib/log.ts'
 import { orderReference, uuid } from '../lib/crypto.ts'
+import { config } from '../config.ts'
 import { getProvider } from '../payments/index.ts'
 import type { IntentStatus } from '../payments/types.ts'
+import { activeCheckoutStyle } from './settings.ts'
 import { buildCart, markCartConverted } from './cart.ts'
 import { commitStock, releaseStock, reserveStock } from './inventory.ts'
 import { computeTotals, type PricedLine, type Totals } from './pricing.ts'
@@ -138,6 +140,11 @@ export interface CreateOrderResult {
     clientSecret: string | null
     status: IntentStatus
     publishableKey?: string
+    /** Hosted checkout page to send the shopper to. Absent only if the provider failed to return one. */
+    checkoutUrl?: string
+    sessionId?: string
+    /** 'stripe' means the shopper pays on Stripe's page; 'mock' means the dev page. */
+    checkoutStyle: 'stripe' | 'mock'
   }
 }
 
@@ -225,20 +232,70 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
 
   // The network call sits outside the transaction so a slow provider never
   // holds a database write lock.
-  let intent
+  //
+  // The shopper is sent to a provider-hosted page to pay, so no card data ever
+  // touches this server. In production that page is Stripe Checkout; in
+  // development the mock provider returns an in-app page that settles through
+  // the same signed-webhook path.
+  const style = activeCheckoutStyle()
+  let intentId: string
+  let clientSecret: string | null = null
+  let intentStatus: IntentStatus = 'requires_payment'
+  let publishableKey: string | undefined
+  let checkoutUrl: string | undefined
+  let sessionId: string | undefined
+
   try {
-    intent = await provider.createIntent({
-      orderRef: ref,
-      amountCents: totals.totalCents,
-      currency: 'usd',
-      email: input.email,
-      metadata: { order_ref: ref, order_id: orderId },
-      idempotencyKey: `order_${orderId}`,
-    })
+    if (typeof provider.createCheckoutSession === 'function') {
+      const session = await provider.createCheckoutSession({
+        orderRef: ref,
+        orderId,
+        amountCents: totals.totalCents,
+        currency: config.currency,
+        email: input.email,
+        successUrl: `${config.storefrontUrl}/order/${ref}?checkout=success`,
+        cancelUrl: `${config.storefrontUrl}/cart?checkout=cancelled`,
+        productName: `Borealis Air order ${ref}`,
+        metadata: { order_ref: ref, order_id: orderId },
+        idempotencyKey: `order_${orderId}`,
+      })
+
+      intentId = session.paymentIntentId ?? `cs_${session.id}`
+      publishableKey = session.publishableKey
+      checkoutUrl = session.url
+      sessionId = session.id
+
+      run('UPDATE orders SET payment_intent_id = ?, checkout_session_id = ?, updated_at = ? WHERE id = ?', [
+        intentId,
+        session.id,
+        new Date().toISOString(),
+        orderId,
+      ])
+    } else {
+      // Providers without hosted checkout fall back to a bare payment intent.
+      const intent = await provider.createIntent({
+        orderRef: ref,
+        amountCents: totals.totalCents,
+        currency: config.currency,
+        email: input.email,
+        metadata: { order_ref: ref, order_id: orderId },
+        idempotencyKey: `order_${orderId}`,
+      })
+      intentId = intent.id
+      clientSecret = intent.clientSecret
+      intentStatus = intent.status
+      publishableKey = intent.publishableKey
+
+      run('UPDATE orders SET payment_intent_id = ?, updated_at = ? WHERE id = ?', [
+        intentId,
+        new Date().toISOString(),
+        orderId,
+      ])
+    }
   } catch (err) {
     // Give the stock back and close the order out.
     try {
-      releaseStock(orderId, 'payment intent creation failed')
+      releaseStock(orderId, 'payment session creation failed')
       transaction(() => {
         run(
           "UPDATE orders SET status = 'failed', payment_status = 'failed', updated_at = ? WHERE id = ?",
@@ -246,7 +303,7 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
         )
       })
     } catch (cleanupErr) {
-      logger.error('failed to release stock after intent failure', {
+      logger.error('failed to release stock after session failure', {
         orderId,
         message: String(cleanupErr),
       })
@@ -254,15 +311,10 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
     throw err
   }
 
-  run('UPDATE orders SET payment_intent_id = ?, updated_at = ? WHERE id = ?', [
-    intent.id,
-    new Date().toISOString(),
-    orderId,
-  ])
-
-  recordPaymentEvent(orderId, provider.name, 'intent.created', null, totals.totalCents, {
-    intentId: intent.id,
-    status: intent.status,
+  recordPaymentEvent(orderId, provider.name, 'checkout.session.created', null, totals.totalCents, {
+    intentId,
+    sessionId: sessionId ?? null,
+    status: intentStatus,
   })
 
   const row = getOrderRow(orderId)!
@@ -270,10 +322,13 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
     order: toOrderDTO(row, loadLines(orderId)),
     payment: {
       provider: provider.name,
-      intentId: intent.id,
-      clientSecret: intent.clientSecret,
-      status: intent.status,
-      publishableKey: intent.publishableKey,
+      intentId,
+      clientSecret,
+      status: intentStatus,
+      publishableKey,
+      checkoutUrl,
+      sessionId,
+      checkoutStyle: style,
     },
   }
 }
@@ -443,6 +498,20 @@ export function getOrderById(id: string): OrderDTO | null {
 
 export function getOrderRowByIntent(intentId: string): Row | undefined {
   return queryOne<Row>('SELECT * FROM orders WHERE payment_intent_id = ?', [intentId])
+}
+
+/** Checkout Session events address the order by session id, not intent id. */
+export function getOrderRowBySession(sessionId: string): Row | undefined {
+  return queryOne<Row>('SELECT * FROM orders WHERE checkout_session_id = ?', [sessionId])
+}
+
+/** Resolves an order from either a payment intent id or a checkout session id. */
+export function findOrderRowByPayment(event: { intentId: string | null; sessionId?: string | null }): Row | undefined {
+  if (event.sessionId) {
+    const bySession = getOrderRowBySession(event.sessionId)
+    if (bySession) return bySession
+  }
+  return event.intentId ? getOrderRowByIntent(event.intentId) : undefined
 }
 
 /** Internal id for a public reference, or null when it does not exist. */

@@ -40,12 +40,19 @@ local development. See `server/config.ts` for the full list.
 | `DATABASE_PATH` | `server/data/borealis.db` | SQLite file, or `:memory:` |
 |  `CORS_ORIGINS` | `http://localhost:12000` | Allowed CORS origin |
 | `SESSION_SECRET` | dev value | Required in production |
-| `PAYMENT_PROVIDER` | `mock` | `mock` or `stripe` |
-| `STRIPE_SECRET_KEY` | — | Required for `stripe` |
-| `STRIPE_WEBHOOK_SECRET` | — | Required for `stripe` |
-| `STRIPE_PUBLISHABLE_KEY` | — | Returned to the client |
+| `SETTINGS_ENCRYPTION_KEY` | falls back to `SESSION_SECRET` | Encrypts stored Stripe credentials. Required in production |
+| `STOREFRONT_URL` | `http://localhost:12000` | Origin used for checkout success/cancel redirects |
+| `CURRENCY` | `usd` | Currency for new orders |
+| `PAYMENT_PROVIDER` | `mock` | `mock` or `stripe` — the fallback when the CMS has no choice stored |
+| `STRIPE_SECRET_KEY` | — | Fallback for `stripe` |
+| `STRIPE_WEBHOOK_SECRET` | — | Fallback for `stripe` |
+| `STRIPE_PUBLISHABLE_KEY` | — | Fallback for `stripe`; returned to the client |
 | `TRUST_PROXY` | `true` | Honour `X-Forwarded-For` |
 | `RL_*` | see config | Request throttles |
+
+Stripe credentials are normally managed in the admin CMS (see below); the
+environment variables are the fallback for deployments that keep secrets out of
+the database.
 
 ## API
 
@@ -78,7 +85,8 @@ Totals are always recomputed server-side.
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `POST` | `/api/checkout` | Places an order, reserves stock, returns a payment intent |
+| `GET` | `/api/checkout/config` | Public: active checkout style, mode, publishable key |
+| `POST` | `/api/checkout` | Places an order, reserves stock, returns a hosted `checkoutUrl` |
 | `GET` | `/api/orders/:ref` | Order lookup by reference |
 | `POST` | `/api/orders/:ref/cancel` | Cancel a pending order and release its hold |
 | `POST` | `/api/webhooks/payments` | Provider webhook (signature verified) |
@@ -98,19 +106,25 @@ Totals are always recomputed server-side.
 }
 ```
 
-It responds with the order and the payment intent:
+It responds with the order and the redirect target:
 
 ```json
 {
   "order": { "ref": "BA-XXXXXXXX", "status": "pending", "totalCents": 140509, "...": "..." },
   "payment": {
-    "provider": "mock",
-    "intentId": "pi_mock_...",
-    "clientSecret": "pi_mock_..._secret_...",
-    "status": "requires_payment"
+    "provider": "stripe",
+    "intentId": "pi_...",
+    "clientSecret": null,
+    "status": "requires_payment",
+    "checkoutUrl": "https://checkout.stripe.com/c/pay/cs_...",
+    "sessionId": "cs_...",
+    "checkoutStyle": "stripe"
   }
 }
 ```
+
+The shopper is redirected to `checkoutUrl`; card details are entered there and
+never reach this server. The order settles when the provider webhook arrives.
 
 ### Authentication
 
@@ -144,6 +158,26 @@ All admin routes require an `admin` role.
 | `POST` | `/api/admin/orders/:ref/fulfill` | Mark a paid order fulfilled |
 | `POST` | `/api/admin/orders/:ref/refund` | Refund a paid order |
 
+### Admin CMS
+
+Product CRUD and payment settings, also admin-only.
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| `GET` | `/api/admin/products` | Filters: `q`, `category`, `includeInactive`, `limit`, `offset` |
+| `GET` | `/api/admin/products/:id` | Product detail, including stock |
+| `POST` | `/api/admin/products` | Create a product and its inventory row |
+| `PUT` | `/api/admin/products/:id` | Update a product |
+| `DELETE` | `/api/admin/products/:id` | Delete, or deactivate if it has order history |
+| `POST` | `/api/admin/products/:id/restore` | Reactivate a deactivated product |
+| `GET` | `/api/admin/settings/payments` | Stripe settings; secrets are masked |
+| `PUT` | `/api/admin/settings/payments` | Set keys, active mode, checkout style, or clear a mode |
+
+A product's stock row is created in the same transaction as the product, so a
+product is never visible without inventory tracking. Prices are sent and stored
+as integer cents. `DELETE` keeps historical order lines intact by deactivating
+products that appear on an order rather than removing them.
+
 ## How inventory works
 
 Stock is tracked as two counters per product: `on_hand` and `reserved`.
@@ -174,31 +208,53 @@ last unit. The loser gets a `409` with the remaining quantity.
 `server/payments/` defines a small `PaymentProvider` interface with two
 implementations.
 
-- **`mock`** — the default for development. It produces client secrets and
-  correctly signed webhooks, so the real webhook path is exercised end to end.
-  The `/api/dev/payments/:intentId/confirm` endpoint signs a genuine webhook and
-  feeds it through the same handler production uses. The storefront calls it from
-  the confirmation page. This provider is refused when `NODE_ENV=production`.
-- **`stripe`** — a real client over the Stripe REST API using `fetch`. It
-  verifies webhook signatures with a timing-safe comparison and enforces a
-  timestamp tolerance window.
+- **`mock`** — the default for development. It produces hosted-checkout
+  stand-ins and correctly signed webhooks, so the real redirect-and-return path
+  is exercised end to end. `POST /api/checkout` returns a `checkoutUrl` pointing
+  at the storefront's `/checkout/mock` page; confirming there calls
+  `/api/dev/payments/:intentId/confirm`, which signs a genuine webhook and feeds
+  it through the same handler production uses. This provider is refused when
+  `NODE_ENV=production`.
+- **`stripe`** — a real client over the Stripe REST API using `fetch`. Checkout
+  uses **Stripe-hosted Checkout Sessions** (`POST /v1/checkout/sessions`), so card
+  data is entered on Stripe's page and never reaches this server. Webhook
+  signatures are verified with a timing-safe comparison and a timestamp
+  tolerance window.
 
 Webhook handling is idempotent: each event id is recorded once, and an order
 that is already settled is not settled again. Amounts are checked against the
 order total, and a mismatch is rejected rather than trusted.
 
+### Managing Stripe credentials in the CMS
+
+Sign in at `/admin/payments`. Credentials are stored per mode — **sandbox** and
+**production** — encrypted at rest with AES-256-GCM (key derived from
+`SETTINGS_ENCRYPTION_KEY`). The API never returns a stored secret; the admin UI
+sees only a masked preview. Two switches decide what the storefront charges
+with: the active mode (`sandbox` or `production`) and the checkout style
+(`stripe` or `mock`). `getProvider()` reads these per request, so a change takes
+effect without a restart. Clearing a mode removes its keys entirely.
+
+Environment fallback still works: if no CMS value is stored, the matching
+`STRIPE_*` variable is used, and the admin UI labels it `(environment)`.
+
 ### Using Stripe
+
+Either configure the keys in `/admin/payments`, or set them in the environment:
 
 ```bash
 export PAYMENT_PROVIDER=stripe
 export STRIPE_SECRET_KEY=sk_live_...
 export STRIPE_WEBHOOK_SECRET=whsec_...
 export STRIPE_PUBLISHABLE_KEY=pk_live_...
+export SETTINGS_ENCRYPTION_KEY=<32+ random bytes>
 export NODE_ENV=production
 ```
 
 Point a Stripe webhook endpoint at `/api/webhooks/payments` and subscribe to
-`payment_intent.succeeded` and `payment_intent.payment_failed`.
+`checkout.session.completed`, `checkout.session.expired`,
+`checkout.session.async_payment_succeeded`/`_failed`, and the
+`payment_intent.*` equivalents.
 
 ## Tests
 

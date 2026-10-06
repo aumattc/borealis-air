@@ -1,7 +1,15 @@
 import { hmacSha256Hex, safeEqual, uuid } from '../lib/crypto.ts'
 import { badRequest } from '../lib/errors.ts'
 import { config } from '../config.ts'
-import { mapStatus, type CreateIntentInput, type PaymentIntentResult, type PaymentProvider, type WebhookEvent } from './types.ts'
+import {
+  mapStatus,
+  type CheckoutSessionInput,
+  type CheckoutSessionResult,
+  type CreateIntentInput,
+  type PaymentIntentResult,
+  type PaymentProvider,
+  type WebhookEvent,
+} from './types.ts'
 
 /**
  * Development / test provider.
@@ -42,6 +50,31 @@ export const mockProvider: PaymentProvider = {
 
   async refund(id: string): Promise<{ id: string; status: string }> {
     return { id: `re_mock_${id.slice(-10)}`, status: 'succeeded' }
+  },
+
+  /**
+   * Stands in for Stripe hosted Checkout: instead of redirecting to Stripe, it
+   * sends the shopper to an in-app page that settles the intent through the
+   * same signed-webhook path the real provider uses.
+   */
+  async createCheckoutSession(input: CheckoutSessionInput): Promise<CheckoutSessionResult> {
+    if (config.isProd) throw new Error('The mock payment provider cannot be used in production.')
+
+    const intentId = `pi_mock_${uuid().replace(/-/g, '').slice(0, 20)}`
+    const sessionId = `cs_mock_${uuid().replace(/-/g, '').slice(0, 20)}`
+    const url = `${config.storefrontUrl}/checkout/mock?session=${sessionId}&ref=${encodeURIComponent(input.orderRef)}&intent=${intentId}`
+
+    return {
+      id: sessionId,
+      url,
+      paymentIntentId: intentId,
+      expiresAt: Math.floor(Date.now() / 1000) + 30 * 60,
+      publishableKey: config.payments.stripe.publishableKey || 'pk_test_mock',
+    }
+  },
+
+  async retrieveCheckoutSession(_id: string): Promise<{ paymentIntentId: string | null; status: string }> {
+    return { paymentIntentId: null, status: 'open' }
   },
 
   verifyWebhook(rawBody: string, signatureHeader: string | undefined): WebhookEvent {
