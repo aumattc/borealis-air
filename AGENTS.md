@@ -58,6 +58,11 @@ TypeScript). No npm packages, no native builds. Details in `server/README.md`.
   its own chrome and auth gate (`useAdminAuth`). It manages products, inventory,
   orders and Stripe credentials. Backend routes are under `/api/admin/*` and all
   call `requireAdmin`. Product CRUD is in `server/services/products.ts`.
+  - `AdminApp` renders its own nested `<Routes>`. Those routes are anchored at
+    `/admin` (e.g. `<Route path="/admin" element={<AdminLayout/>}>`), because the
+    nested router matches the full pathname, not the remainder after the mount
+    point. A pathless layout route here matches nothing and silently renders an
+    empty `<Outlet/>`.
 - Stripe credentials are managed at runtime: `server/services/settings.ts` stores
   them encrypted (AES-256-GCM, `server/lib/secrets.ts`) with separate sandbox and
   production slots and an active-mode switch. Env vars remain the fallback.
