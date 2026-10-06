@@ -12,3 +12,9 @@ npm-debug.log*
 # Backend local database
 server/data/*.db
 server/data/*.db-*
+
+# Transfer artifacts (not source)
+/borealis-air.bundle
+/borealis-air-src.tar.gz
+/public/borealis-air.bundle
+/public/borealis-air-src.tar.gz
