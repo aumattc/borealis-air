@@ -30,7 +30,7 @@ function AdminRoutes() {
 
   return (
     <Routes>
-      <Route element={<AdminLayout />}>
+      <Route path="/admin" element={<AdminLayout />}>
         <Route index element={<AdminOverview />} />
         <Route path="products" element={<AdminProducts />} />
         <Route path="inventory" element={<AdminInventory />} />
