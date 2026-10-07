@@ -8,8 +8,10 @@ import { Shop } from './pages/Shop'
 import { ProductDetail } from './pages/ProductDetail'
 import { Cart } from './pages/Cart'
 import { Checkout } from './pages/Checkout'
+import { MockCheckout } from './pages/MockCheckout'
 import { Confirmation } from './pages/Confirmation'
 import { NotFound } from './pages/NotFound'
+import { AdminApp } from './pages/admin/AdminApp'
 
 function ScrollToTop() {
   const { pathname } = useLocation()
@@ -21,6 +23,12 @@ function ScrollToTop() {
 
 export function App() {
   useRevealObserver()
+  const { pathname } = useLocation()
+
+  // The admin CMS is a separate surface: its own chrome, its own auth gate.
+  if (pathname === '/admin' || pathname.startsWith('/admin/')) {
+    return <AdminApp />
+  }
 
   return (
     <div className="app-shell">
@@ -36,6 +44,7 @@ export function App() {
           <Route path="/product/:slug" element={<ProductDetail />} />
           <Route path="/cart" element={<Cart />} />
           <Route path="/checkout" element={<Checkout />} />
+          <Route path="/checkout/mock" element={<MockCheckout />} />
           <Route path="/order/:ref" element={<Confirmation />} />
           <Route path="*" element={<NotFound />} />
         </Routes>

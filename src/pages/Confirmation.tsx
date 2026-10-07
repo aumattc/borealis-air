@@ -1,15 +1,54 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { formatPrice } from '../data/products'
-import { getOrder, type Order } from '../lib/orders'
+import type { Order } from '../lib/orders'
+import { fetchOrder, toFrontendOrder, type ApiOrder } from '../lib/api'
 
 export function Confirmation() {
   const { ref } = useParams()
+  const [searchParams] = useSearchParams()
+  const returnedFromCheckout = searchParams.get('checkout') === 'success'
   const [order, setOrder] = useState<Order | null | undefined>(undefined)
+  const [pending, setPending] = useState(false)
 
   useEffect(() => {
-    setOrder(ref ? getOrder(ref) : null)
-  }, [ref])
+    let cancelled = false
+
+    async function load() {
+      if (!ref) {
+        setOrder(null)
+        return
+      }
+
+      try {
+        let apiOrder: ApiOrder = await fetchOrder(ref)
+        if (cancelled) return
+
+        // Returning from a hosted checkout, the webhook may not have landed
+        // yet — give it a moment and poll rather than showing a stale status.
+        const unsettled = apiOrder.paymentStatus === 'requires_payment' || apiOrder.paymentStatus === 'processing'
+        if (returnedFromCheckout && unsettled) {
+          setPending(true)
+          for (let attempt = 0; attempt < 8 && unsettled; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 800))
+            apiOrder = await fetchOrder(ref)
+            if (cancelled) return
+            if (apiOrder.paymentStatus !== 'requires_payment' && apiOrder.paymentStatus !== 'processing') break
+          }
+          setPending(false)
+        }
+
+        setOrder(toFrontendOrder(apiOrder))
+      } catch {
+        if (!cancelled) setOrder(null)
+      }
+    }
+
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [ref, returnedFromCheckout])
 
   if (order === undefined) return null
 
@@ -22,8 +61,8 @@ export function Confirmation() {
             We cannot find <em>that order.</em>
           </h1>
           <p className="lede">
-            The reference <span className="mono">{ref}</span> is not on this device. Orders are
-            stored locally in this demo.
+            The reference <span className="mono">{ref}</span> is not one we recognise. Check the
+            link in your confirmation email and try again.
           </p>
           <Link to="/shop" className="btn btn--ember">
             Back to the range
@@ -54,7 +93,7 @@ export function Confirmation() {
             />
           </svg>
         </div>
-        <p className="eyebrow">Order confirmed</p>
+        <p className="eyebrow">{pending ? 'Confirming payment…' : 'Order confirmed'}</p>
         <h1 className="display confirm__title">
           The cold front is <em>on its way.</em>
         </h1>

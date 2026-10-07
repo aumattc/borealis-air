@@ -7,7 +7,12 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --noEmit",
+    "api": "node server/index.ts",
+    "api:dev": "node --watch server/index.ts",
+    "api:admin": "node server/scripts/create-admin.ts",
+    "api:test": "node --test --test-concurrency=1 server/tests/*.test.ts",
+    "api:migrate": "node -e \"import('./server/db/migrate.ts').then(m => { const r = m.migrate(); console.log('applied', r.applied) })\""
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -15,6 +20,7 @@
     "react-router-dom": "^6.28.0"
   },
   "devDependencies": {
+    "@types/node": "^22.20.5",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
